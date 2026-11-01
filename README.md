@@ -1,6 +1,11 @@
 # porthog 🐗
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Article](https://img.shields.io/badge/Deep_Dive-Read_Post-10b981)](https://www.zaynelovecraft.com/articles/filesystem-first-ai-agent-os-cursor-claude)
+
 Zero-dependency macOS CLI wrapper around `lsof`, `ps`, and `launchctl` to inspect listening TCP ports, see the working directory and memory footprint of whatever is hogging a port, and trace it back to `launchd` before killing it.
+
+> 📖 **Read how this fits into my dev setup:** [Filesystem-First AI Agent OS for Cursor and Claude Code](https://www.zaynelovecraft.com/articles/filesystem-first-ai-agent-os-cursor-claude)
 
 ```text
 $ porthog
