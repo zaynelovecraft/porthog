@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# porthog — zero-dependency macOS CLI around lsof, ps, and launchctl
+# Inspect listening TCP ports, trace parent launchd services, and kill or restart port hogs.
+
+set -euo pipefail
+
+VERSION="0.2.0"
+
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+RED=$'\033[31m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+CYAN=$'\033[36m'
+RESET=$'\033[0m'
+
+usage() {
+  cat <<EOF
+${BOLD}porthog${RESET} v${VERSION} — inspect & kill macOS port hogs + launchctl services
+
+${BOLD}USAGE${RESET}
+  porthog                  List all listening TCP ports with PID, memory, and command
+  porthog <port>           Inspect process, parent PID, cwd, and launchctl service on <port>
+  porthog kill <port>      Gracefully stop (SIGTERM -> SIGKILL) whatever is holding <port>
+  porthog services         List running non-Apple launchctl user agents with PIDs
+  porthog restart <label>  Kickstart a launchctl user service (gui/\$UID/<label>)
+
+${BOLD}EXAMPLES${RESET}
+  porthog                  # Table of all active listening ports
+  porthog 3000             # Deep-dive on port 3000 (process tree + cwd + launchd label)
+  porthog kill 54321       # Free port 54321 immediately
+  porthog services         # Show background launchd user services
+EOF
+}
+
+list_ports() {
+  printf "${BOLD}%-8s %-8s %-8s %-18s %s${RESET}\n" "PORT" "PID" "MEM" "COMMAND" "USER"
+  printf "${DIM}%s${RESET}\n" "------------------------------------------------------------------------"
+
+  lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {
+    split($9, addr, ":");
+    port = addr[length(addr)];
+    key = port ":" $2;
+    if (!seen[key]++) {
+      print port, $2, $1, $3
+    }
+  }' | sort -n -k1,1 | while read -r port pid cmd user; do
+    rss_kb=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ' || echo "0")
+    if [[ -n "$rss_kb" && "$rss_kb" -gt 0 ]]; then
+      mem_mb=$(( rss_kb / 1024 ))
+      mem_str="${mem_mb}MB"
+    else
+      mem_str="-"
+    fi
+    printf "${CYAN}%-8s${RESET} %-8s ${YELLOW}%-8s${RESET} ${GREEN}%-18s${RESET} ${DIM}%s${RESET}\n" \
+      ":$port" "$pid" "$mem_str" "$cmd" "$user"
+  done
+}
+
+inspect_port() {
+  local port="$1"
+  local pids
+  pids=$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+
+  if [[ -z "$pids" ]]; then
+    echo "${GREEN}✓ Port :${port} is free.${RESET}"
+    exit 0
+  fi
+
+  for pid in $pids; do
+    local cmd full_cmd ppid rss_kb mem_mb cwd launch_label
+    cmd=$(ps -o comm= -p "$pid" 2>/dev/null || echo "unknown")
+    full_cmd=$(ps -o args= -p "$pid" 2>/dev/null || echo "unknown")
+    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || echo "0")
+    rss_kb=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ' || echo "0")
+    mem_mb=$(( ${rss_kb:-0} / 1024 ))
+    cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | awk '/^n/ {print substr($0,2)}' || echo "-")
+    launch_label=$(launchctl list 2>/dev/null | awk -v p="$pid" '$1 == p {print $3}' || true)
+
+    echo "${BOLD}${CYAN}:${port}${RESET} is held by ${BOLD}${cmd}${RESET} (PID ${YELLOW}${pid}${RESET})"
+    echo "  ${DIM}Command:${RESET}  ${full_cmd}"
+    echo "  ${DIM}Workdir:${RESET}  ${cwd:-unknown}"
+    echo "  ${DIM}Memory:${RESET}   ${mem_mb} MB (PPID: ${ppid})"
+    if [[ -n "$launch_label" ]]; then
+      echo "  ${DIM}launchd:${RESET}  ${YELLOW}${launch_label}${RESET} (managed service — use 'porthog restart ${launch_label}')"
+    fi
+  done
+}
+
+kill_port() {
+  local port="$1"
+  local pids
+  pids=$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+
+  if [[ -z "$pids" ]]; then
+    echo "${DIM}Nothing listening on port :${port}.${RESET}"
+    exit 0
+  fi
+
+  for pid in $pids; do
+    local cmd
+    cmd=$(ps -o comm= -p "$pid" 2>/dev/null || echo "process")
+    echo "${YELLOW}→ Sending SIGTERM to ${cmd} (PID ${pid}) on :${port}...${RESET}"
+    kill -15 "$pid" 2>/dev/null || true
+    sleep 0.4
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "${RED}→ Still alive; sending SIGKILL to PID ${pid}...${RESET}"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    echo "${GREEN}✓ Freed port :${port} (PID ${pid}).${RESET}"
+  done
+}
+
+list_services() {
+  printf "${BOLD}%-8s %-8s %s${RESET}\n" "PID" "STATUS" "LAUNCHCTL LABEL (non-Apple)"
+  printf "${DIM}%s${RESET}\n" "------------------------------------------------------------------------"
+  launchctl list 2>/dev/null | awk 'NR>1 && $3 !~ /^com\.apple\./ && $1 != "-" {
+    printf "%-8s %-8s %s\n", $1, $2, $3
+  }' | sort -k3
+}
+
+restart_service() {
+  local label="$1"
+  local domain="gui/$(id -u)"
+  echo "${CYAN}→ Kickstarting ${domain}/${label}...${RESET}"
+  launchctl kickstart -k "${domain}/${label}"
+  echo "${GREEN}✓ Restarted ${label}.${RESET}"
+}
+
+case "${1:-}" in
+  ""|list|ls)
+    list_ports
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  -v|--version|version)
+    echo "porthog v${VERSION}"
+    ;;
+  kill|k)
+    [[ -z "${2:-}" ]] && { echo "${RED}Error: specify a port (e.g. porthog kill 3000)${RESET}"; exit 1; }
+    kill_port "${2#:}"
+    ;;
+  services|svc)
+    list_services
+    ;;
+  restart)
+    [[ -z "${2:-}" ]] && { echo "${RED}Error: specify a launchctl label${RESET}"; exit 1; }
+    restart_service "$2"
+    ;;
+  *)
+    if [[ "${1#:}" =~ ^[0-9]+$ ]]; then
+      inspect_port "${1#:}"
+    else
+      usage
+      exit 1
+    fi
+    ;;
+esac
