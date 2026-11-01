@@ -34,17 +34,31 @@ Every macOS dev eventually types `lsof -i :3000` followed by `kill -9 <pid>`, on
 
 ## Install
 
-### Direct install (`~/.local/bin`)
+Requires macOS. No dependencies; it only uses `lsof`, `ps`, and `launchctl`, which ship with macOS.
+
+### One-liner
+
+```bash
+mkdir -p ~/.local/bin && \
+curl -fsSL https://raw.githubusercontent.com/zaynelovecraft/porthog/main/bin/porthog -o ~/.local/bin/porthog && \
+chmod +x ~/.local/bin/porthog
+```
+
+### From source
 
 ```bash
 git clone https://github.com/zaynelovecraft/porthog.git
-cd porthog && make install
+cd porthog && make install          # installs to ~/.local/bin/porthog
 ```
 
-### Homebrew
+Use `make install PREFIX=/usr/local` to install somewhere else, and `make uninstall` to remove it.
+
+### Make sure it's on your PATH
+
+If `porthog --version` says `command not found`, add this to `~/.zshrc` and open a new terminal:
 
 ```bash
-brew install --HEAD https://raw.githubusercontent.com/zaynelovecraft/porthog/main/Formula/porthog.rb
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## Usage
