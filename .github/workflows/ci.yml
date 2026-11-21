@@ -1,0 +1,14 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n bin/porthog
+      - run: make install PREFIX=/tmp/porthog-ci && test -x /tmp/porthog-ci/bin/porthog
